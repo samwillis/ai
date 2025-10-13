@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AI, ToolConfig } from "@tanstack/ai";
+import { AI, defineTools } from "@tanstack/ai";
 import { OllamaAdapter } from "@tanstack/ai-ollama";
 import { OpenAIAdapter } from "@tanstack/ai-openai";
 
@@ -13,44 +13,37 @@ You can use the following tools to help the user:
 - recommendGuitar: Recommend a guitar to the user
 `;
 
-// Define tools registry
-const tools = {
+// Define tools registry with full type safety using defineTools
+const tools = defineTools({
   getGuitars: {
-    type: "function",
-    function: {
-      name: "getGuitars",
-      description: "Get all products from the database",
-      parameters: {
-        type: "object",
-        properties: {},
-        required: [],
-      },
+    description: "Get all products from the database",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
     },
     execute: async () => {
       return JSON.stringify(guitars);
     },
   },
   recommendGuitar: {
-    type: "function",
-    function: {
-      name: "recommendGuitar",
-      description: "Use this tool to recommend a guitar to the user",
-      parameters: {
-        type: "object",
-        properties: {
-          id: {
-            type: "string",
-            description: "The id of the guitar to recommend",
-          },
+    description: "Use this tool to recommend a guitar to the user",
+    parameters: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "The id of the guitar to recommend",
         },
-        required: ["id"],
       },
+      required: ["id"],
     },
-    execute: async ({ id }: { id: string }) => {
-      return JSON.stringify({ id });
+    execute: async (args) => {
+      // args is automatically typed as { id: string }
+      return JSON.stringify({ id: args.id });
     },
   },
-} as const satisfies ToolConfig;
+});
 
 // Initialize AI with tools and system prompts in constructor
 const ai = new AI({

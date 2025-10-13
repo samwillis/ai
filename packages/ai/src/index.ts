@@ -4,3 +4,4 @@ export * from "./types";
 export * from "./utils";
 export * from "./stream-utils";
 export * from "./stream-to-response";
+export * from "./tool-utils";
