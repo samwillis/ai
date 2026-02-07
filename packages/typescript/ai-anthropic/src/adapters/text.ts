@@ -401,9 +401,10 @@ export class AnthropicTextAdapter<
         for (const toolCall of message.toolCalls) {
           let parsedInput: unknown = {}
           try {
-            parsedInput = toolCall.function.arguments
+            const parsed = toolCall.function.arguments
               ? JSON.parse(toolCall.function.arguments)
               : {}
+            parsedInput = parsed && typeof parsed === 'object' ? parsed : {}
           } catch {
             parsedInput = toolCall.function.arguments
           }
@@ -589,7 +590,8 @@ export class AnthropicTextAdapter<
             // Emit TOOL_CALL_END
             let parsedInput: unknown = {}
             try {
-              parsedInput = existing.input ? JSON.parse(existing.input) : {}
+              const parsed = existing.input ? JSON.parse(existing.input) : {}
+              parsedInput = parsed && typeof parsed === 'object' ? parsed : {}
             } catch {
               parsedInput = {}
             }
