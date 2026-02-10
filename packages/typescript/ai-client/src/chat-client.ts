@@ -44,6 +44,7 @@ export class ChatClient {
   private continuationPending = false
   private subscriptionAbortController: AbortController | null = null
   private processingResolve: (() => void) | null = null
+  private streamGeneration = 0
 
   private callbacksRef: {
     current: {
@@ -414,6 +415,9 @@ export class ChatClient {
       return
     }
 
+    // Track generation so a superseded stream's cleanup doesn't clobber the new one
+    const generation = ++this.streamGeneration
+
     this.setIsLoading(true)
     this.setStatus('submitted')
     this.setError(undefined)
@@ -468,6 +472,12 @@ export class ChatClient {
       // Wait for subscription loop to finish processing all chunks
       await processingComplete
 
+      // If this stream was superseded (e.g. by reload()), bail out —
+      // the new stream owns the processor and processingResolve now.
+      if (generation !== this.streamGeneration) {
+        return
+      }
+
       // Wait for pending client tool executions
       if (this.pendingToolExecutions.size > 0) {
         await Promise.all(this.pendingToolExecutions.values())
@@ -484,28 +494,38 @@ export class ChatClient {
         if (err.name === 'AbortError') {
           return
         }
-        this.setError(err)
-        this.setStatus('error')
-        this.callbacksRef.current.onError(err)
+        if (generation === this.streamGeneration) {
+          this.setError(err)
+          this.setStatus('error')
+          this.callbacksRef.current.onError(err)
+        }
       }
     } finally {
-      this.abortController = null
-      this.setIsLoading(false)
-      this.pendingMessageBody = undefined // Ensure it's cleared even on error
+      // Only clean up if this is still the active stream.
+      // A superseded stream (e.g. reload() started a new one) must not
+      // clobber the new stream's abortController or isLoading state.
+      if (generation === this.streamGeneration) {
+        this.abortController = null
+        this.setIsLoading(false)
+        this.pendingMessageBody = undefined // Ensure it's cleared even on error
 
-      // Drain any actions that were queued while the stream was in progress
-      await this.drainPostStreamActions()
+        // Drain any actions that were queued while the stream was in progress
+        await this.drainPostStreamActions()
 
-      // Continue conversation if the stream ended with a tool result (server tool completed)
-      if (streamCompletedSuccessfully) {
-        const messages = this.processor.getMessages()
-        const lastPart = messages.at(-1)?.parts.at(-1)
+        // Continue conversation if the stream ended with a tool result (server tool completed)
+        if (streamCompletedSuccessfully) {
+          const messages = this.processor.getMessages()
+          const lastPart = messages.at(-1)?.parts.at(-1)
 
-        if (lastPart?.type === 'tool-result' && this.shouldAutoSend()) {
-          try {
-            await this.checkForContinuation()
-          } catch (error) {
-            console.error('Failed to continue flow after tool result:', error)
+          if (lastPart?.type === 'tool-result' && this.shouldAutoSend()) {
+            try {
+              await this.checkForContinuation()
+            } catch (error) {
+              console.error(
+                'Failed to continue flow after tool result:',
+                error,
+              )
+            }
           }
         }
       }
@@ -525,6 +545,17 @@ export class ChatClient {
     )
 
     if (lastUserMessageIndex === -1) return
+
+    // Cancel any active stream before reloading
+    if (this.isLoading) {
+      this.abortController?.abort()
+      this.abortController = null
+      this.subscriptionAbortController?.abort()
+      this.subscriptionAbortController = null
+      this.processingResolve?.()
+      this.processingResolve = null
+      this.setIsLoading(false)
+    }
 
     this.events.reloaded(lastUserMessageIndex)
 
