@@ -778,8 +778,8 @@ export interface TextMessageStartEvent extends BaseAGUIEvent {
   type: 'TEXT_MESSAGE_START'
   /** Unique identifier for this message */
   messageId: string
-  /** Role is always assistant for generated messages */
-  role: 'assistant'
+  /** Role of the message sender */
+  role: 'user' | 'assistant' | 'system' | 'tool'
 }
 
 /**
@@ -813,6 +813,8 @@ export interface ToolCallStartEvent extends BaseAGUIEvent {
   toolCallId: string
   /** Name of the tool being called */
   toolName: string
+  /** ID of the parent message that initiated this tool call */
+  parentMessageId?: string
   /** Index for parallel tool calls */
   index?: number
 }
