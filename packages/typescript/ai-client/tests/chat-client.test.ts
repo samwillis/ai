@@ -74,6 +74,12 @@ describe('ChatClient', () => {
       // Message IDs should be unique between clients
       expect(client1MessageId).not.toBe(client2MessageId)
     })
+
+    it('should throw if neither connection nor session is provided', () => {
+      expect(() => new ChatClient({} as any)).toThrow(
+        'Either connection or session must be provided',
+      )
+    })
   })
 
   describe('sendMessage', () => {

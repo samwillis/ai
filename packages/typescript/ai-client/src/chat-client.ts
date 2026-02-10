@@ -11,6 +11,8 @@ import type {
   StreamChunk,
 } from '@tanstack/ai'
 import type { ConnectionAdapter } from './connection-adapters'
+import type { SessionAdapter } from './session-adapter'
+import { createDefaultSession } from './session-adapter'
 import type { ChatClientEventEmitter } from './events'
 import type {
   ChatClientOptions,
@@ -23,7 +25,7 @@ import type {
 
 export class ChatClient {
   private processor: StreamProcessor
-  private connection: ConnectionAdapter
+  private session!: SessionAdapter
   private uniqueId: string
   private body: Record<string, any> = {}
   private pendingMessageBody: Record<string, any> | undefined = undefined
@@ -40,6 +42,8 @@ export class ChatClient {
   private pendingToolExecutions: Map<string, Promise<void>> = new Map()
   // Flag to deduplicate continuation checks during action draining
   private continuationPending = false
+  private subscriptionAbortController: AbortController | null = null
+  private processingResolve: (() => void) | null = null
 
   private callbacksRef: {
     current: {
@@ -57,7 +61,15 @@ export class ChatClient {
   constructor(options: ChatClientOptions) {
     this.uniqueId = options.id || this.generateUniqueId('chat')
     this.body = options.body || {}
-    this.connection = options.connection
+
+    // Resolve session adapter
+    if (options.session) {
+      this.session = options.session
+    } else if (options.connection) {
+      this.session = createDefaultSession(options.connection)
+    } else {
+      throw new Error('Either connection or session must be provided')
+    }
     this.events = new DefaultChatClientEventEmitter(this.uniqueId)
 
     // Build client tools map
@@ -95,6 +107,9 @@ export class ChatClient {
         onStreamEnd: (message: UIMessage) => {
           this.callbacksRef.current.onFinish(message)
           this.setStatus('ready')
+          // Resolve the processing-complete promise so streamResponse can continue
+          this.processingResolve?.()
+          this.processingResolve = null
         },
         onError: (error: Error) => {
           this.setError(error)
@@ -226,68 +241,60 @@ export class ChatClient {
   }
 
   /**
-   * Process a stream through the StreamProcessor
+   * Start the background subscription loop.
    */
-  private async processStream(
-    source: AsyncIterable<StreamChunk>,
-  ): Promise<UIMessage | null> {
-    // Generate a stream ID for this streaming operation
-    this.currentStreamId = this.generateUniqueId('stream')
+  private startSubscription(): void {
+    this.subscriptionAbortController = new AbortController()
+    const signal = this.subscriptionAbortController.signal
 
-    // Prepare for a new assistant message (created lazily on first content)
-    this.processor.prepareAssistantMessage()
+    this.consumeSubscription(signal).catch((err) => {
+      if (err instanceof Error && err.name !== 'AbortError') {
+        this.setError(err)
+        this.setStatus('error')
+        this.callbacksRef.current.onError(err)
+      }
+      // Resolve pending processing so streamResponse doesn't hang
+      this.processingResolve?.()
+      this.processingResolve = null
+    })
+  }
 
-    // Process each chunk
-    for await (const chunk of source) {
+  /**
+   * Consume chunks from the session subscription.
+   */
+  private async consumeSubscription(signal: AbortSignal): Promise<void> {
+    const stream = this.session.subscribe(signal)
+    for await (const chunk of stream) {
+      if (signal.aborted) break
       this.callbacksRef.current.onChunk(chunk)
       this.processor.processChunk(chunk)
-
-      // Track the message ID once the processor lazily creates it
-      if (!this.currentMessageId) {
-        const newMessageId =
-          this.processor.getCurrentAssistantMessageId() ?? null
-        if (newMessageId) {
-          this.currentMessageId = newMessageId
-          // Emit message appended event now that the assistant message exists
-          const assistantMessage = this.processor
-            .getMessages()
-            .find((m: UIMessage) => m.id === newMessageId)
-          if (assistantMessage) {
-            this.events.messageAppended(
-              assistantMessage,
-              this.currentStreamId || undefined,
-            )
-          }
-        }
-      }
-
-      // Yield control back to event loop to allow UI updates
+      // Yield control back to event loop for UI updates
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
+  }
 
-    // Wait for all pending tool executions to complete before finalizing
-    // This ensures client tools finish before we check for continuation
-    if (this.pendingToolExecutions.size > 0) {
-      await Promise.all(this.pendingToolExecutions.values())
+  /**
+   * Ensure subscription loop is running, starting it if needed.
+   */
+  private ensureSubscription(): void {
+    if (
+      !this.subscriptionAbortController ||
+      this.subscriptionAbortController.signal.aborted
+    ) {
+      this.startSubscription()
     }
+  }
 
-    // Finalize the stream
-    this.processor.finalizeStream()
-
-    // Get the message ID (may be null if no content arrived)
-    const messageId = this.processor.getCurrentAssistantMessageId()
-
-    // Clear the current stream and message IDs
-    this.currentStreamId = null
-    this.currentMessageId = null
-
-    // Return the assistant message if one was created
-    if (messageId) {
-      const messages = this.processor.getMessages()
-      return messages.find((m: UIMessage) => m.id === messageId) || null
-    }
-
-    return null
+  /**
+   * Create a promise that resolves when onStreamEnd fires.
+   * Used by streamResponse to await processing completion.
+   */
+  private waitForProcessing(): Promise<void> {
+    // Resolve any stale promise (e.g., from a previous aborted request)
+    this.processingResolve?.()
+    return new Promise<void>((resolve) => {
+      this.processingResolve = resolve
+    })
   }
 
   /**
@@ -433,14 +440,44 @@ export class ChatClient {
       // Clear the pending message body after use
       this.pendingMessageBody = undefined
 
-      // Connect and stream
-      const stream = this.connection.connect(
-        messages,
-        mergedBody,
-        this.abortController.signal,
+      // Generate stream ID and start assistant message
+      this.currentStreamId = this.generateUniqueId('stream')
+      const messageId = this.processor.startAssistantMessage()
+      this.currentMessageId = messageId
+
+      const assistantMessage: UIMessage = {
+        id: messageId,
+        role: 'assistant',
+        parts: [],
+        createdAt: new Date(),
+      }
+      this.events.messageAppended(
+        assistantMessage,
+        this.currentStreamId || undefined,
       )
 
-      await this.processStream(stream)
+      // Ensure subscription loop is running
+      this.ensureSubscription()
+
+      // Set up promise that resolves when onStreamEnd fires
+      const processingComplete = this.waitForProcessing()
+
+      // Send through session adapter (pushes chunks to subscription queue)
+      await this.session.send(messages, mergedBody, this.abortController.signal)
+
+      // Wait for subscription loop to finish processing all chunks
+      await processingComplete
+
+      // Wait for pending client tool executions
+      if (this.pendingToolExecutions.size > 0) {
+        await Promise.all(this.pendingToolExecutions.values())
+      }
+
+      // Finalize (idempotent — may already be done by RUN_FINISHED handler)
+      this.processor.finalizeStream()
+
+      this.currentStreamId = null
+      this.currentMessageId = null
       streamCompletedSuccessfully = true
     } catch (err) {
       if (err instanceof Error) {
@@ -502,10 +539,20 @@ export class ChatClient {
    * Stop the current stream
    */
   stop(): void {
+    // Abort any in-flight send
     if (this.abortController) {
       this.abortController.abort()
       this.abortController = null
     }
+
+    // Abort the subscription loop
+    this.subscriptionAbortController?.abort()
+    this.subscriptionAbortController = null
+
+    // Resolve any pending processing promise (unblock streamResponse)
+    this.processingResolve?.()
+    this.processingResolve = null
+
     this.setIsLoading(false)
     this.setStatus('ready')
     this.events.stopped()
@@ -678,6 +725,7 @@ export class ChatClient {
    */
   updateOptions(options: {
     connection?: ConnectionAdapter
+    session?: SessionAdapter
     body?: Record<string, any>
     tools?: ReadonlyArray<AnyClientTool>
     onResponse?: (response?: Response) => void | Promise<void>
@@ -685,8 +733,12 @@ export class ChatClient {
     onFinish?: (message: UIMessage) => void
     onError?: (error: Error) => void
   }): void {
-    if (options.connection !== undefined) {
-      this.connection = options.connection
+    if (options.session !== undefined) {
+      this.subscriptionAbortController?.abort()
+      this.session = options.session
+    } else if (options.connection !== undefined) {
+      this.subscriptionAbortController?.abort()
+      this.session = createDefaultSession(options.connection)
     }
     if (options.body !== undefined) {
       this.body = options.body

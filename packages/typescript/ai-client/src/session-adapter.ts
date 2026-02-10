@@ -71,6 +71,9 @@ export function createDefaultSession(
         }
         if (chunk !== null) yield chunk
       }
+      // Discard any chunks buffered after abort to prevent stale data
+      // leaking into the next subscription
+      buffer.length = 0
     },
 
     async send(messages, data, signal) {
