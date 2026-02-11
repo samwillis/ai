@@ -531,10 +531,7 @@ export class ChatClient {
             try {
               await this.checkForContinuation()
             } catch (error) {
-              console.error(
-                'Failed to continue flow after tool result:',
-                error,
-              )
+              console.error('Failed to continue flow after tool result:', error)
             }
           }
         }

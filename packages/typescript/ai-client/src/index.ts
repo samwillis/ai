@@ -30,10 +30,7 @@ export {
   type ConnectionAdapter,
   type FetchConnectionOptions,
 } from './connection-adapters'
-export {
-  createDefaultSession,
-  type SessionAdapter,
-} from './session-adapter'
+export { createDefaultSession, type SessionAdapter } from './session-adapter'
 
 // Re-export message converters from @tanstack/ai
 export {

@@ -209,7 +209,11 @@ describe('createDefaultSession', () => {
     const abortController = new AbortController()
     await session.send([], undefined, abortController.signal)
 
-    expect(onConnect).toHaveBeenCalledWith([], undefined, abortController.signal)
+    expect(onConnect).toHaveBeenCalledWith(
+      [],
+      undefined,
+      abortController.signal,
+    )
   })
 
   it('should not lose chunks after stop-then-resume subscription cycle', async () => {

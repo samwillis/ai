@@ -17,10 +17,7 @@
  * @see docs/chat-architecture.md — Canonical reference for AG-UI chunk ordering,
  *   adapter contract, single-shot flows, and expected UIMessage output.
  */
-import {
-  generateMessageId,
-  uiMessageToModelMessages,
-} from '../messages.js'
+import { generateMessageId, uiMessageToModelMessages } from '../messages.js'
 import { defaultJSONParser } from './json-parser'
 import {
   updateTextPart,
@@ -520,9 +517,7 @@ export class StreamProcessor {
   /**
    * Get the MessageStreamState for a message
    */
-  private getMessageState(
-    messageId: string,
-  ): MessageStreamState | undefined {
+  private getMessageState(messageId: string): MessageStreamState | undefined {
     return this.messageStates.get(messageId)
   }
 
@@ -638,7 +633,9 @@ export class StreamProcessor {
         // If tool calls happened since last text, this TEXT_MESSAGE_START
         // signals a new text segment — reset segment accumulation
         if (existingState.hasToolCallsSinceTextStart) {
-          if (existingState.currentSegmentText !== existingState.lastEmittedText) {
+          if (
+            existingState.currentSegmentText !== existingState.lastEmittedText
+          ) {
             this.emitTextUpdateForMessage(messageId)
           }
           existingState.currentSegmentText = ''
