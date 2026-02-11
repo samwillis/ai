@@ -52,7 +52,7 @@ export interface ChunkStrategy {
  */
 export interface MessageStreamState {
   id: string
-  role: 'user' | 'assistant' | 'system' | 'tool'
+  role: 'user' | 'assistant' | 'system'
   totalTextContent: string
   currentSegmentText: string
   lastEmittedText: string

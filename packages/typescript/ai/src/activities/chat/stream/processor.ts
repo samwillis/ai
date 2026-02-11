@@ -496,7 +496,7 @@ export class StreamProcessor {
    */
   private createMessageState(
     messageId: string,
-    role: 'user' | 'assistant' | 'system' | 'tool',
+    role: 'user' | 'assistant' | 'system',
   ): MessageStreamState {
     const state: MessageStreamState = {
       id: messageId,
@@ -588,6 +588,12 @@ export class StreamProcessor {
   ): void {
     const { messageId, role } = chunk
 
+    // Map 'tool' role to 'assistant' for both UIMessage and MessageStreamState
+    // (UIMessage doesn't support 'tool' role, and lookups like
+    // getActiveAssistantMessageId() check state.role === 'assistant')
+    const uiRole: 'system' | 'user' | 'assistant' =
+      role === 'tool' ? 'assistant' : role
+
     // Case 1: A manual message was created via startAssistantMessage()
     if (this.pendingManualMessageId) {
       const pendingId = this.pendingManualMessageId
@@ -614,7 +620,7 @@ export class StreamProcessor {
 
       // Ensure state exists
       if (!this.messageStates.has(messageId)) {
-        this.createMessageState(messageId, role)
+        this.createMessageState(messageId, uiRole)
         this.activeMessageIds.add(messageId)
       }
 
@@ -627,7 +633,7 @@ export class StreamProcessor {
     if (existingMsg) {
       this.activeMessageIds.add(messageId)
       if (!this.messageStates.has(messageId)) {
-        this.createMessageState(messageId, role)
+        this.createMessageState(messageId, uiRole)
       } else {
         const existingState = this.messageStates.get(messageId)!
         // If tool calls happened since last text, this TEXT_MESSAGE_START
@@ -647,10 +653,6 @@ export class StreamProcessor {
     }
 
     // Case 3: New message from the stream
-    // Map 'tool' role to 'assistant' for UIMessage (UIMessage doesn't support 'tool' role)
-    const uiRole: 'system' | 'user' | 'assistant' =
-      role === 'tool' ? 'assistant' : role
-
     const newMessage: UIMessage = {
       id: messageId,
       role: uiRole,
@@ -659,7 +661,7 @@ export class StreamProcessor {
     }
 
     this.messages = [...this.messages, newMessage]
-    this.createMessageState(messageId, role)
+    this.createMessageState(messageId, uiRole)
     this.activeMessageIds.add(messageId)
 
     this.events.onStreamStart?.()
