@@ -694,11 +694,8 @@ export class StreamProcessor {
   private handleMessagesSnapshotEvent(
     chunk: Extract<StreamChunk, { type: 'MESSAGES_SNAPSHOT' }>,
   ): void {
+    this.resetStreamState()
     this.messages = [...chunk.messages]
-    this.messageStates.clear()
-    this.activeMessageIds.clear()
-    this.toolCallToMessage.clear()
-    this.pendingManualMessageId = null
     this.emitMessagesChange()
   }
 
