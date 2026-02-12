@@ -744,9 +744,10 @@ export class StreamProcessor {
     let nextText = currentText
 
     // Prefer delta over content - delta is the incremental change
-    // Check for both undefined and empty string to avoid "undefined" string concatenation
-    if (chunk.delta !== '') {
-      nextText = currentText + chunk.delta
+    // Normalize to empty string to avoid "undefined" string concatenation
+    const delta = chunk.delta ?? ''
+    if (delta !== '') {
+      nextText = currentText + delta
     } else if (chunk.content !== undefined && chunk.content !== '') {
       // Fallback: use content if delta is not provided
       if (chunk.content.startsWith(currentText)) {
