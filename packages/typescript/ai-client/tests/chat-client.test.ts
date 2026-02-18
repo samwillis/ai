@@ -6,6 +6,7 @@ import {
   createThinkingChunks,
   createToolCallChunks,
 } from './test-utils'
+import type { StreamChunk } from '@tanstack/ai'
 import type { UIMessage } from '../src/types'
 
 describe('ChatClient', () => {
@@ -75,10 +76,119 @@ describe('ChatClient', () => {
       expect(client1MessageId).not.toBe(client2MessageId)
     })
 
-    it('should throw if neither connection nor session is provided', () => {
+    it('should throw if connection is not provided', () => {
       expect(() => new ChatClient({} as any)).toThrow(
-        'Either connection or session must be provided',
+        'Connection adapter is required',
       )
+    })
+
+    it('should throw when subscribe/send are partially implemented', () => {
+      const adapterMissingSend = {
+        subscribe: async function* () {},
+      } as any
+
+      const adapterMissingSubscribe = {
+        send: async () => {},
+      } as any
+
+      expect(() => new ChatClient({ connection: adapterMissingSend })).toThrow(
+        'Connection adapter must provide either connect or both subscribe and send',
+      )
+      expect(
+        () => new ChatClient({ connection: adapterMissingSubscribe }),
+      ).toThrow(
+        'Connection adapter must provide either connect or both subscribe and send',
+      )
+    })
+
+    it('should throw when both connection modes are provided', () => {
+      const invalidAdapter = {
+        connect: async function* () {},
+        subscribe: async function* () {},
+        send: async () => {},
+      } as any
+
+      expect(() => new ChatClient({ connection: invalidAdapter })).toThrow(
+        'Connection adapter must provide either connect or both subscribe and send, not both modes',
+      )
+    })
+  })
+
+  describe('subscribe/send connection mode', () => {
+    function createSubscribeAdapter(chunksToSend: Array<StreamChunk>) {
+      const queue: Array<StreamChunk> = []
+      const waiters: Array<(chunk: StreamChunk | null) => void> = []
+      const push = (chunk: StreamChunk) => {
+        const waiter = waiters.shift()
+        if (waiter) waiter(chunk)
+        else queue.push(chunk)
+      }
+
+      const subscribe = vi.fn((signal?: AbortSignal) => {
+        return (async function* () {
+          while (!signal?.aborted) {
+            if (queue.length > 0) {
+              yield queue.shift()!
+              continue
+            }
+            const chunk = await new Promise<StreamChunk | null>((resolve) => {
+              const onAbort = () => resolve(null)
+              waiters.push((c) => {
+                signal?.removeEventListener('abort', onAbort)
+                resolve(c)
+              })
+              signal?.addEventListener('abort', onAbort, { once: true })
+            })
+            if (chunk !== null) yield chunk
+          }
+        })()
+      })
+
+      const send = vi.fn(async () => {
+        for (const chunk of chunksToSend) {
+          push(chunk)
+        }
+      })
+
+      return { subscribe, send }
+    }
+
+    it('should use subscribe/send adapter mode', async () => {
+      const adapter = createSubscribeAdapter(
+        createTextChunks('From subscribe/send mode'),
+      )
+      const client = new ChatClient({ connection: adapter })
+
+      await client.sendMessage('Hello')
+
+      expect(adapter.subscribe).toHaveBeenCalled()
+      expect(adapter.send).toHaveBeenCalled()
+    })
+
+    it('should remain pending without terminal run events', async () => {
+      const adapter = createSubscribeAdapter([
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          messageId: 'msg-1',
+          model: 'test',
+          timestamp: Date.now(),
+          delta: 'H',
+          content: 'H',
+        },
+      ])
+      const client = new ChatClient({ connection: adapter })
+
+      const sendPromise = client.sendMessage('Hello')
+      const completed = await Promise.race([
+        sendPromise.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+      ])
+
+      expect(completed).toBe(false)
+
+      // Explicitly stop to unblock the in-flight request.
+      client.stop()
+      await sendPromise
     })
   })
 
@@ -535,6 +645,38 @@ describe('ChatClient', () => {
       await client.sendMessage('Success')
       expect(client.getError()).toBeUndefined()
       expect(client.getStatus()).not.toBe('error')
+    })
+
+    it('should not hang when connection is updated during an active stream', async () => {
+      const noTerminalAdapter = createMockConnectionAdapter({
+        chunks: [
+          {
+            type: 'TEXT_MESSAGE_CONTENT',
+            messageId: 'msg-1',
+            model: 'test',
+            timestamp: Date.now(),
+            delta: 'H',
+            content: 'H',
+          },
+        ],
+        chunkDelay: 50,
+      })
+      const replacementAdapter = createMockConnectionAdapter({
+        chunks: createTextChunks('replacement'),
+      })
+      const client = new ChatClient({ connection: noTerminalAdapter })
+
+      const sendPromise = client.sendMessage('Hello')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      client.updateOptions({ connection: replacementAdapter })
+
+      const completed = await Promise.race([
+        sendPromise.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+      ])
+
+      expect(completed).toBe(true)
+      expect(client.getIsLoading()).toBe(false)
     })
   })
 

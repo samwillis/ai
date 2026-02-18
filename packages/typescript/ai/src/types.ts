@@ -702,7 +702,6 @@ export type AGUIEventType =
   | 'TOOL_CALL_END'
   | 'STEP_STARTED'
   | 'STEP_FINISHED'
-  | 'MESSAGES_SNAPSHOT'
   | 'STATE_SNAPSHOT'
   | 'STATE_DELTA'
   | 'CUSTOM'
@@ -779,8 +778,8 @@ export interface TextMessageStartEvent extends BaseAGUIEvent {
   type: 'TEXT_MESSAGE_START'
   /** Unique identifier for this message */
   messageId: string
-  /** Role of the message sender */
-  role: 'user' | 'assistant' | 'system' | 'tool'
+  /** Role is always assistant for generated messages */
+  role: 'assistant'
 }
 
 /**
@@ -814,8 +813,6 @@ export interface ToolCallStartEvent extends BaseAGUIEvent {
   toolCallId: string
   /** Name of the tool being called */
   toolName: string
-  /** ID of the parent message that initiated this tool call */
-  parentMessageId?: string
   /** Index for parallel tool calls */
   index?: number
 }
@@ -873,19 +870,6 @@ export interface StepFinishedEvent extends BaseAGUIEvent {
 }
 
 /**
- * Emitted to provide a snapshot of all messages in a conversation.
- *
- * Unlike StateSnapshot (which carries arbitrary application state),
- * MessagesSnapshot specifically delivers the conversation transcript.
- * This is a first-class AG-UI event type.
- */
-export interface MessagesSnapshotEvent extends BaseAGUIEvent {
-  type: 'MESSAGES_SNAPSHOT'
-  /** Complete array of messages in the conversation */
-  messages: Array<UIMessage>
-}
-
-/**
  * Emitted to provide a full state snapshot.
  */
 export interface StateSnapshotEvent extends BaseAGUIEvent {
@@ -929,7 +913,6 @@ export type AGUIEvent =
   | ToolCallEndEvent
   | StepStartedEvent
   | StepFinishedEvent
-  | MessagesSnapshotEvent
   | StateSnapshotEvent
   | StateDeltaEvent
   | CustomEvent

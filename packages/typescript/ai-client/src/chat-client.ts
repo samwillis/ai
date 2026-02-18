@@ -4,16 +4,18 @@ import {
   normalizeToUIMessage,
 } from '@tanstack/ai'
 import { DefaultChatClientEventEmitter } from './events'
-import { createDefaultSession } from './session-adapter'
+import { normalizeConnectionAdapter } from './connection-adapters'
 import type {
   AnyClientTool,
   ContentPart,
   ModelMessage,
   StreamChunk,
 } from '@tanstack/ai'
-import type { ConnectionAdapter } from './connection-adapters'
+import type {
+  ConnectionAdapter,
+  NormalizedConnectionAdapter,
+} from './connection-adapters'
 import type { ChatClientEventEmitter } from './events'
-import type { SessionAdapter } from './session-adapter'
 import type {
   ChatClientOptions,
   ChatClientState,
@@ -25,7 +27,7 @@ import type {
 
 export class ChatClient {
   private processor: StreamProcessor
-  private session!: SessionAdapter
+  private connection: NormalizedConnectionAdapter
   private uniqueId: string
   private body: Record<string, any> = {}
   private pendingMessageBody: Record<string, any> | undefined = undefined
@@ -62,15 +64,7 @@ export class ChatClient {
   constructor(options: ChatClientOptions) {
     this.uniqueId = options.id || this.generateUniqueId('chat')
     this.body = options.body || {}
-
-    // Resolve session adapter
-    if (options.session) {
-      this.session = options.session
-    } else if (options.connection) {
-      this.session = createDefaultSession(options.connection)
-    } else {
-      throw new Error('Either connection or session must be provided')
-    }
+    this.connection = normalizeConnectionAdapter(options.connection)
     this.events = new DefaultChatClientEventEmitter(this.uniqueId)
 
     // Build client tools map
@@ -272,10 +266,10 @@ export class ChatClient {
   }
 
   /**
-   * Consume chunks from the session subscription.
+   * Consume chunks from the connection subscription.
    */
   private async consumeSubscription(signal: AbortSignal): Promise<void> {
-    const stream = this.session.subscribe(signal)
+    const stream = this.connection.subscribe(signal)
     for await (const chunk of stream) {
       if (signal.aborted) break
       this.callbacksRef.current.onChunk(chunk)
@@ -476,8 +470,8 @@ export class ChatClient {
       // Set up promise that resolves when onStreamEnd fires
       const processingComplete = this.waitForProcessing()
 
-      // Send through session adapter (pushes chunks to subscription queue)
-      await this.session.send(messages, mergedBody, this.abortController.signal)
+      // Send through normalized connection (pushes chunks to subscription queue)
+      await this.connection.send(messages, mergedBody, this.abortController.signal)
 
       // Wait for subscription loop to finish processing all chunks
       await processingComplete
@@ -763,7 +757,6 @@ export class ChatClient {
    */
   updateOptions(options: {
     connection?: ConnectionAdapter
-    session?: SessionAdapter
     body?: Record<string, any>
     tools?: ReadonlyArray<AnyClientTool>
     onResponse?: (response?: Response) => void | Promise<void>
@@ -771,12 +764,22 @@ export class ChatClient {
     onFinish?: (message: UIMessage) => void
     onError?: (error: Error) => void
   }): void {
-    if (options.session !== undefined) {
-      this.subscriptionAbortController?.abort()
-      this.session = options.session
-    } else if (options.connection !== undefined) {
-      this.subscriptionAbortController?.abort()
-      this.session = createDefaultSession(options.connection)
+    if (options.connection !== undefined) {
+      // Cancel any in-flight stream to avoid hanging on stale processing promises
+      if (this.isLoading) {
+        this.abortController?.abort()
+        this.abortController = null
+        this.subscriptionAbortController?.abort()
+        this.subscriptionAbortController = null
+        this.processingResolve?.()
+        this.processingResolve = null
+        this.setIsLoading(false)
+        this.setStatus('ready')
+      } else {
+        this.subscriptionAbortController?.abort()
+        this.subscriptionAbortController = null
+      }
+      this.connection = normalizeConnectionAdapter(options.connection)
     }
     if (options.body !== undefined) {
       this.body = options.body
