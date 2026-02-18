@@ -114,8 +114,7 @@ export class ChatClient {
           this.callbacksRef.current.onFinish(message)
           this.setStatus('ready')
           // Resolve the processing-complete promise so streamResponse can continue
-          this.processingResolve?.()
-          this.processingResolve = null
+          this.resolveProcessing()
         },
         onError: (error: Error) => {
           this.setError(error)
@@ -246,6 +245,27 @@ export class ChatClient {
     this.events.errorChanged(error?.message || null)
   }
 
+  private abortSubscriptionLoop(): void {
+    this.subscriptionAbortController?.abort()
+    this.subscriptionAbortController = null
+  }
+
+  private resolveProcessing(): void {
+    this.processingResolve?.()
+    this.processingResolve = null
+  }
+
+  private cancelInFlightStream(options?: { setReadyStatus?: boolean }): void {
+    this.abortController?.abort()
+    this.abortController = null
+    this.abortSubscriptionLoop()
+    this.resolveProcessing()
+    this.setIsLoading(false)
+    if (options?.setReadyStatus) {
+      this.setStatus('ready')
+    }
+  }
+
   /**
    * Start the background subscription loop.
    */
@@ -260,8 +280,7 @@ export class ChatClient {
         this.callbacksRef.current.onError(err)
       }
       // Resolve pending processing so streamResponse doesn't hang
-      this.processingResolve?.()
-      this.processingResolve = null
+      this.resolveProcessing()
     })
   }
 
@@ -277,8 +296,7 @@ export class ChatClient {
       // RUN_FINISHED / RUN_ERROR signal run completion — resolve processing
       // (redundant if onStreamEnd already resolved it, harmless)
       if (chunk.type === 'RUN_FINISHED' || chunk.type === 'RUN_ERROR') {
-        this.processingResolve?.()
-        this.processingResolve = null
+        this.resolveProcessing()
       }
       // Yield control back to event loop for UI updates
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -303,7 +321,7 @@ export class ChatClient {
    */
   private waitForProcessing(): Promise<void> {
     // Resolve any stale promise (e.g., from a previous aborted request)
-    this.processingResolve?.()
+    this.resolveProcessing()
     return new Promise<void>((resolve) => {
       this.processingResolve = resolve
     })
@@ -549,13 +567,7 @@ export class ChatClient {
 
     // Cancel any active stream before reloading
     if (this.isLoading) {
-      this.abortController?.abort()
-      this.abortController = null
-      this.subscriptionAbortController?.abort()
-      this.subscriptionAbortController = null
-      this.processingResolve?.()
-      this.processingResolve = null
-      this.setIsLoading(false)
+      this.cancelInFlightStream()
     }
 
     this.events.reloaded(lastUserMessageIndex)
@@ -571,22 +583,7 @@ export class ChatClient {
    * Stop the current stream
    */
   stop(): void {
-    // Abort any in-flight send
-    if (this.abortController) {
-      this.abortController.abort()
-      this.abortController = null
-    }
-
-    // Abort the subscription loop
-    this.subscriptionAbortController?.abort()
-    this.subscriptionAbortController = null
-
-    // Resolve any pending processing promise (unblock streamResponse)
-    this.processingResolve?.()
-    this.processingResolve = null
-
-    this.setIsLoading(false)
-    this.setStatus('ready')
+    this.cancelInFlightStream({ setReadyStatus: true })
     this.events.stopped()
   }
 
@@ -767,17 +764,9 @@ export class ChatClient {
     if (options.connection !== undefined) {
       // Cancel any in-flight stream to avoid hanging on stale processing promises
       if (this.isLoading) {
-        this.abortController?.abort()
-        this.abortController = null
-        this.subscriptionAbortController?.abort()
-        this.subscriptionAbortController = null
-        this.processingResolve?.()
-        this.processingResolve = null
-        this.setIsLoading(false)
-        this.setStatus('ready')
+        this.cancelInFlightStream({ setReadyStatus: true })
       } else {
-        this.subscriptionAbortController?.abort()
-        this.subscriptionAbortController = null
+        this.abortSubscriptionLoop()
       }
       this.connection = normalizeConnectionAdapter(options.connection)
     }

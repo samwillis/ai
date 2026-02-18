@@ -179,7 +179,7 @@ export interface ChatClientOptions<
 > {
   /**
    * Connection adapter for streaming.
-   * Supports either request-response mode via `connect()`, or
+   * Supports mutually exclusive modes: request-response via `connect()`, or
    * subscribe/send mode via `subscribe()` + `send()`.
    */
   connection: ConnectionAdapter

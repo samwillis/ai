@@ -194,7 +194,7 @@ export function normalizeConnectionAdapter(
           })
         }
       } catch (err) {
-        if (!abortSignal?.aborted) {
+        if (!abortSignal?.aborted && !hasTerminalEvent) {
           push({
             type: 'RUN_ERROR',
             timestamp: Date.now(),

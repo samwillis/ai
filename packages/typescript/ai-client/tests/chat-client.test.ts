@@ -82,72 +82,47 @@ describe('ChatClient', () => {
       )
     })
 
-    it('should throw when subscribe/send are partially implemented', () => {
-      const adapterMissingSend = {
-        subscribe: async function* () {},
-      } as any
-
-      const adapterMissingSubscribe = {
-        send: async () => {},
-      } as any
-
-      expect(() => new ChatClient({ connection: adapterMissingSend })).toThrow(
-        'Connection adapter must provide either connect or both subscribe and send',
-      )
-      expect(
-        () => new ChatClient({ connection: adapterMissingSubscribe }),
-      ).toThrow(
-        'Connection adapter must provide either connect or both subscribe and send',
-      )
-    })
-
-    it('should throw when both connection modes are provided', () => {
-      const invalidAdapter = {
-        connect: async function* () {},
-        subscribe: async function* () {},
-        send: async () => {},
-      } as any
-
-      expect(() => new ChatClient({ connection: invalidAdapter })).toThrow(
-        'Connection adapter must provide either connect or both subscribe and send, not both modes',
-      )
-    })
   })
 
   describe('subscribe/send connection mode', () => {
     function createSubscribeAdapter(chunksToSend: Array<StreamChunk>) {
-      const queue: Array<StreamChunk> = []
-      const waiters: Array<(chunk: StreamChunk | null) => void> = []
-      const push = (chunk: StreamChunk) => {
-        const waiter = waiters.shift()
-        if (waiter) waiter(chunk)
-        else queue.push(chunk)
-      }
+      let hasPendingSend = false
+      let wakeSubscriber: (() => void) | null = null
+      let removeAbortListener: (() => void) | null = null
 
       const subscribe = vi.fn((signal?: AbortSignal) => {
         return (async function* () {
           while (!signal?.aborted) {
-            if (queue.length > 0) {
-              yield queue.shift()!
+            if (!hasPendingSend) {
+              await new Promise<void>((resolve) => {
+                removeAbortListener?.()
+                removeAbortListener = null
+                wakeSubscriber = resolve
+                const onAbort = () => resolve()
+                signal?.addEventListener('abort', onAbort, { once: true })
+                removeAbortListener = () => {
+                  signal?.removeEventListener('abort', onAbort)
+                }
+              })
               continue
             }
-            const chunk = await new Promise<StreamChunk | null>((resolve) => {
-              const onAbort = () => resolve(null)
-              waiters.push((c) => {
-                signal?.removeEventListener('abort', onAbort)
-                resolve(c)
-              })
-              signal?.addEventListener('abort', onAbort, { once: true })
-            })
-            if (chunk !== null) yield chunk
+
+            hasPendingSend = false
+            for (const chunk of chunksToSend) {
+              yield chunk
+            }
           }
+          removeAbortListener?.()
+          removeAbortListener = null
         })()
       })
 
       const send = vi.fn(async () => {
-        for (const chunk of chunksToSend) {
-          push(chunk)
-        }
+        removeAbortListener?.()
+        removeAbortListener = null
+        hasPendingSend = true
+        wakeSubscriber?.()
+        wakeSubscriber = null
       })
 
       return { subscribe, send }
