@@ -46,7 +46,6 @@ export class ChatClient {
   private continuationPending = false
   private subscriptionAbortController: AbortController | null = null
   private processingResolve: (() => void) | null = null
-  private pendingSubscriptionError: Error | null = null
   private errorReportedGeneration: number | null = null
   private streamGeneration = 0
 
@@ -280,12 +279,6 @@ export class ChatClient {
     }
   }
 
-  private consumePendingSubscriptionError(): Error | null {
-    const error = this.pendingSubscriptionError
-    this.pendingSubscriptionError = null
-    return error
-  }
-
   /**
    * Start the background subscription loop.
    */
@@ -295,7 +288,6 @@ export class ChatClient {
 
     this.consumeSubscription(signal).catch((err) => {
       if (err instanceof Error && err.name !== 'AbortError') {
-        this.pendingSubscriptionError = err
         this.reportStreamError(err)
       }
       // Resolve pending processing so streamResponse doesn't hang
@@ -470,7 +462,6 @@ export class ChatClient {
     this.setStatus('submitted')
     this.setError(undefined)
     this.errorReportedGeneration = null
-    this.pendingSubscriptionError = null
     this.abortController = new AbortController()
     // Reset pending tool executions for the new stream
     this.pendingToolExecutions.clear()
@@ -521,11 +512,6 @@ export class ChatClient {
         return
       }
 
-      const subscriptionError = this.consumePendingSubscriptionError()
-      if (subscriptionError) {
-        throw subscriptionError
-      }
-
       // A RUN_ERROR from the stream transitions status to error.
       // Do not treat this stream as a successful completion.
       if (this.status === 'error') {
@@ -539,9 +525,6 @@ export class ChatClient {
 
       // Finalize (idempotent — may already be done by RUN_FINISHED handler)
       this.processor.finalizeStream()
-
-      this.currentStreamId = null
-      this.currentMessageId = null
       streamCompletedSuccessfully = true
     } catch (err) {
       if (err instanceof Error) {
