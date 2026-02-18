@@ -147,6 +147,8 @@ export function normalizeConnectionAdapter(
 
   return {
     subscribe(abortSignal?: AbortSignal): AsyncIterable<StreamChunk> {
+      // Transfer ownership to the latest subscriber so only one active
+      // subscribe() call receives chunks from the shared connect-wrapper queue.
       const myBuffer: Array<StreamChunk> = activeBuffer.splice(0)
       const myWaiters: Array<(chunk: StreamChunk | null) => void> = []
       activeBuffer = myBuffer

@@ -81,7 +81,6 @@ describe('ChatClient', () => {
         'Connection adapter is required',
       )
     })
-
   })
 
   describe('subscribe/send connection mode', () => {
@@ -479,6 +478,7 @@ describe('ChatClient', () => {
       await client.sendMessage('Hello')
 
       expect(onError).toHaveBeenCalled()
+      expect(onError).toHaveBeenCalledTimes(1)
       expect(onError.mock.calls[0]![0]).toBeInstanceOf(Error)
       expect(onError.mock.calls[0]![0].message).toBe('Connection failed')
       expect(client.getError()).toBeInstanceOf(Error)
@@ -652,6 +652,24 @@ describe('ChatClient', () => {
 
       expect(completed).toBe(true)
       expect(client.getIsLoading()).toBe(false)
+    })
+
+    it('should surface subscription loop failures without hanging', async () => {
+      const connection = {
+        subscribe: async function* () {
+          throw new Error('subscription exploded')
+        },
+        send: async () => {},
+      }
+      const onError = vi.fn()
+      const client = new ChatClient({ connection, onError })
+
+      await client.sendMessage('Hello')
+
+      expect(onError).toHaveBeenCalledTimes(1)
+      expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error)
+      expect(onError.mock.calls[0]?.[0].message).toBe('subscription exploded')
+      expect(client.getStatus()).toBe('error')
     })
   })
 

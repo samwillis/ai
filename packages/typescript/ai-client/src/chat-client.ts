@@ -46,6 +46,8 @@ export class ChatClient {
   private continuationPending = false
   private subscriptionAbortController: AbortController | null = null
   private processingResolve: (() => void) | null = null
+  private pendingSubscriptionError: Error | null = null
+  private errorReportedGeneration: number | null = null
   private streamGeneration = 0
 
   private callbacksRef: {
@@ -98,14 +100,18 @@ export class ChatClient {
         },
         onStreamStart: () => {
           this.setStatus('streaming')
+          const assistantMessageId = this.processor.getCurrentAssistantMessageId()
+          if (!assistantMessageId) {
+            return
+          }
           const messages = this.processor.getMessages()
-          const lastAssistant = messages.findLast(
-            (m: UIMessage) => m.role === 'assistant',
+          const assistantMessage = messages.find(
+            (m: UIMessage) => m.id === assistantMessageId,
           )
-          if (lastAssistant) {
-            this.currentMessageId = lastAssistant.id
+          if (assistantMessage) {
+            this.currentMessageId = assistantMessage.id
             this.events.messageAppended(
-              lastAssistant,
+              assistantMessage,
               this.currentStreamId || undefined,
             )
           }
@@ -117,9 +123,7 @@ export class ChatClient {
           this.resolveProcessing()
         },
         onError: (error: Error) => {
-          this.setError(error)
-          this.setStatus('error')
-          this.callbacksRef.current.onError(error)
+          this.reportStreamError(error)
         },
         onTextUpdate: (messageId: string, content: string) => {
           // Emit text update to devtools
@@ -266,6 +270,22 @@ export class ChatClient {
     }
   }
 
+  private reportStreamError(error: Error): void {
+    const alreadyReported = this.errorReportedGeneration === this.streamGeneration
+    this.setError(error)
+    this.setStatus('error')
+    if (!alreadyReported) {
+      this.errorReportedGeneration = this.streamGeneration
+      this.callbacksRef.current.onError(error)
+    }
+  }
+
+  private consumePendingSubscriptionError(): Error | null {
+    const error = this.pendingSubscriptionError
+    this.pendingSubscriptionError = null
+    return error
+  }
+
   /**
    * Start the background subscription loop.
    */
@@ -275,9 +295,8 @@ export class ChatClient {
 
     this.consumeSubscription(signal).catch((err) => {
       if (err instanceof Error && err.name !== 'AbortError') {
-        this.setError(err)
-        this.setStatus('error')
-        this.callbacksRef.current.onError(err)
+        this.pendingSubscriptionError = err
+        this.reportStreamError(err)
       }
       // Resolve pending processing so streamResponse doesn't hang
       this.resolveProcessing()
@@ -450,6 +469,8 @@ export class ChatClient {
     this.setIsLoading(true)
     this.setStatus('submitted')
     this.setError(undefined)
+    this.errorReportedGeneration = null
+    this.pendingSubscriptionError = null
     this.abortController = new AbortController()
     // Reset pending tool executions for the new stream
     this.pendingToolExecutions.clear()
@@ -500,6 +521,17 @@ export class ChatClient {
         return
       }
 
+      const subscriptionError = this.consumePendingSubscriptionError()
+      if (subscriptionError) {
+        throw subscriptionError
+      }
+
+      // A RUN_ERROR from the stream transitions status to error.
+      // Do not treat this stream as a successful completion.
+      if (this.status === 'error') {
+        return
+      }
+
       // Wait for pending client tool executions
       if (this.pendingToolExecutions.size > 0) {
         await Promise.all(this.pendingToolExecutions.values())
@@ -517,9 +549,7 @@ export class ChatClient {
           return
         }
         if (generation === this.streamGeneration) {
-          this.setError(err)
-          this.setStatus('error')
-          this.callbacksRef.current.onError(err)
+          this.reportStreamError(err)
         }
       }
     } finally {
@@ -527,6 +557,8 @@ export class ChatClient {
       // A superseded stream (e.g. reload() started a new one) must not
       // clobber the new stream's abortController or isLoading state.
       if (generation === this.streamGeneration) {
+        this.currentStreamId = null
+        this.currentMessageId = null
         this.abortController = null
         this.setIsLoading(false)
         this.pendingMessageBody = undefined // Ensure it's cleared even on error
