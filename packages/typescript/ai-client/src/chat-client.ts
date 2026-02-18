@@ -13,7 +13,7 @@ import type {
 } from '@tanstack/ai'
 import type {
   ConnectionAdapter,
-  NormalizedConnectionAdapter,
+  SubscribeConnectionAdapter,
 } from './connection-adapters'
 import type { ChatClientEventEmitter } from './events'
 import type {
@@ -27,7 +27,7 @@ import type {
 
 export class ChatClient {
   private processor: StreamProcessor
-  private connection: NormalizedConnectionAdapter
+  private connection: SubscribeConnectionAdapter
   private uniqueId: string
   private body: Record<string, any> = {}
   private pendingMessageBody: Record<string, any> | undefined = undefined

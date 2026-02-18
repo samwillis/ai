@@ -96,15 +96,6 @@ export type ConnectionAdapter =
   | ConnectConnectionAdapter
   | SubscribeConnectionAdapter
 
-export interface NormalizedConnectionAdapter {
-  subscribe: (abortSignal?: AbortSignal) => AsyncIterable<StreamChunk>
-  send: (
-    messages: Array<UIMessage> | Array<ModelMessage>,
-    data?: Record<string, any>,
-    abortSignal?: AbortSignal,
-  ) => Promise<void>
-}
-
 /**
  * Normalize a ConnectionAdapter to subscribe/send operations.
  *
@@ -113,7 +104,7 @@ export interface NormalizedConnectionAdapter {
  */
 export function normalizeConnectionAdapter(
   connection: ConnectionAdapter | undefined,
-): NormalizedConnectionAdapter {
+): SubscribeConnectionAdapter {
   if (!connection) {
     throw new Error('Connection adapter is required')
   }
